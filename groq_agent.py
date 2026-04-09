@@ -4,8 +4,9 @@ import groq
 
 def search_news():
     # Search for news about S&P500 using DuckDuckGo
-    results = DDGS.search('S&P 500 market news', region='wt-wt', safesearch='Moderate', time='y', max_results=3)
-    return '\n'.join([result.title + ': ' + result.url for result in results])
+    with DDGS() as ddgs:
+        results = list(ddgs.text('S&P 500 market news', max_results=3))
+    return '\n'.join([result['title'] + ': ' + result['href'] for result in results])
 
 def write_article(news_context):
     # Write an article based on the search results
