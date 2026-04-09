@@ -10,14 +10,14 @@ intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 import time
-from duckduckgo_search.exceptions import RateLimitException
+from duckduckgo_search.exceptions import RatelimitException
 
 def search_news(topic):
     try:
         with DDGS() as ddgs:
             # Search for news specifically
             results = list(ddgs.news(topic, max_results=3))
-    except RateLimitException:
+    except RatelimitException:
         time.sleep(1)
         with DDGS() as ddgs:
             # Fallback to text search if news search fails due to rate limit
