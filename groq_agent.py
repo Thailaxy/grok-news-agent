@@ -9,10 +9,19 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
+import time
+from duckduckgo_search.exceptions import RateLimitException
+
 def search_news(topic):
-    with DDGS() as ddgs:
-        # Search for news specifically
-        results = list(ddgs.news(topic, max_results=3))
+    try:
+        with DDGS() as ddgs:
+            # Search for news specifically
+            results = list(ddgs.news(topic, max_results=3))
+    except RateLimitException:
+        time.sleep(1)
+        with DDGS() as ddgs:
+            # Fallback to text search if news search fails due to rate limit
+            results = list(ddgs.text(topic, max_results=3))
     
     formatted_news = ""
     for r in results:
@@ -21,7 +30,7 @@ def search_news(topic):
         body = r.get('body', '')
         formatted_news += f"Headline: {title}\nSummary: {body}\n\n"
     
-    return formatted_news if formatted_news.strip() else "No news found today."
+    return formatted_news if formatted_news.strip() else "No data found"
 
 def write_article(news_context):
     # Write an article based on the search results
