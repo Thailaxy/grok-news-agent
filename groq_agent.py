@@ -3,10 +3,18 @@ from duckduckgo_search import DDGS
 from groq import Groq
 
 def search_news():
-    # Search for news about S&P500 using DuckDuckGo
     with DDGS() as ddgs:
-        results = list(ddgs.text('S&P 500 market news', max_results=3))
-    return '\n'.join([result['title'] + ': ' + result['href'] for result in results])
+        # Search for news specifically
+        results = list(ddgs.news('S&P 500 market', max_results=3))
+    
+    formatted_news = ""
+    for r in results:
+        # Handle potential missing keys gracefully
+        title = r.get('title', 'No Title')
+        body = r.get('body', '')
+        formatted_news += f"Headline: {title}\nSummary: {body}\n\n"
+    
+    return formatted_news if formatted_news.strip() else "No news found today."
 
 def write_article(news_context):
     # Write an article based on the search results
