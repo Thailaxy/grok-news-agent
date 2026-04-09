@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import discord
 from discord.ext import commands
 from duckduckgo_search import DDGS
@@ -7,6 +8,7 @@ from groq import Groq
 intents = discord.Intents.default()
 intents.message_content = True
 
+load_dotenv()
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 import time
@@ -34,6 +36,7 @@ def search_news(topic):
 
 def write_article(news_context):
     # Write an article based on the search results
+    load_dotenv()
     client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
     prompt = f'You are a financial news summarizer. Strictly summarize ONLY the provided news context below. Translate and summarize this specific context into an engaging Thai Facebook post (max 3 short paragraphs). Do NOT invent general financial advice. Do NOT talk about the Thai economy unless it is in the context. Context: {news_context}'
     response = client.chat.completions.create(
@@ -44,6 +47,7 @@ def write_article(news_context):
 
 def review_post(draft):
     # Review and prepare the post
+    load_dotenv()
     client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
     prompt = f'You are a strict editor. Review this Thai Facebook post draft: {draft}. Fix any typos, improve the flow, and add relevant emojis and hashtags like #SP500. IMPORTANT: Output ONLY the final Thai text ready for posting. Do NOT include any conversational filler, introductory phrases, or notes at the end.'
     response = client.chat.completions.create(
@@ -68,4 +72,5 @@ async def news(ctx, topic: str):
     await ctx.send(f'✅ Finalized and Polished Post:')
     await ctx.send(final_post)
 
+load_dotenv()
 bot.run(os.environ.get('DISCORD_TOKEN'))
