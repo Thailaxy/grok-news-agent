@@ -1,6 +1,6 @@
 import os
 from duckduckgo_search import DDGS
-import groq
+from groq import Groq
 
 def search_news():
     # Search for news about S&P500 using DuckDuckGo
@@ -10,19 +10,23 @@ def search_news():
 
 def write_article(news_context):
     # Write an article based on the search results
-    client = groq.Client(os.environ.get('GROQ_API_KEY'))
-    model = client.get_model('llama-3.3-70b-versatile')
+    client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
     prompt = f'Act as a financial content creator and write an engaging Facebook post in Thai language summarizing the provided news: {news_context}. Keep it concise, no longer than 3 short paragraphs (approx 10-15 lines). Ensure the first sentence is a very catchy hook.'
-    response = model.generate(prompt)
-    return response.text
+    response = client.chat.completions.create(
+        messages=[{'role': 'user', 'content': prompt}],
+        model='llama-3.3-70b-versatile'
+    )
+    return response.choices[0].message.content
 
 def review_post(draft):
     # Review and prepare the post
-    client = groq.Client(os.environ.get('GROQ_API_KEY'))
-    model = client.get_model('llama-3.3-70b-versatile')
+    client = Groq(api_key=os.environ.get('GROQ_API_KEY'))
     prompt = f'Act as an editor to review the Thai draft: {draft}. Fix typos, ensure a professional tone, and add relevant emojis and hashtags.'
-    response = model.generate(prompt)
-    return response.text
+    response = client.chat.completions.create(
+        messages=[{'role': 'user', 'content': prompt}],
+        model='llama-3.3-70b-versatile'
+    )
+    return response.choices[0].message.content
 
 if __name__ == "__main__":
     news_context = search_news()
