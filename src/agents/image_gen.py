@@ -1,7 +1,7 @@
 from src.agents.base import BaseAgent
 
 class ImageAgent(BaseAgent):
-    def __init__(self):
+    def __init__(self) -> None:
         instructions = (
             "You are a Creative Visual Prompt Engineer. "
             "Based on a solar energy article, you create detailed, high-quality prompts "
@@ -10,7 +10,7 @@ class ImageAgent(BaseAgent):
         )
         super().__init__("ImageGen", instructions)
 
-    async def process(self, article_text: str, topic: str):
+    async def process(self, article_text: str, topic: str) -> str:
         prompt = f"""You are a visual content specialist for solar energy marketing.
 
 ARTICLE:

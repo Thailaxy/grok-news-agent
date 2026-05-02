@@ -3,4 +3,4 @@ google-generativeai
 groq
 duckduckgo-search
 python-dotenv
-pydantic
+tenacity
