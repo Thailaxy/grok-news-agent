@@ -95,11 +95,17 @@ async def solar(ctx, *, topic: str):
         # Agent 2: ENGINEER - Research
         await ctx.send(f'🔬 **ENGINEER**: Researching "{topic}"...')
         research_data = await bot.engineer.process(topic)
-        if (
-            not research_data
-            or not research_data.get("raw_sources")
-            or not (research_data.get("key_facts_th") or research_data.get("summary_th"))
-        ):
+        _has_content = bool(
+            research_data
+            and research_data.get("raw_sources")
+            and (
+                (research_data.get("overview_th") or "").strip()
+                or research_data.get("technical_th")
+                or research_data.get("cost_roi_th")
+                or research_data.get("faq_th")
+            )
+        )
+        if not _has_content:
             debug = (research_data or {}).get("debug") or "No details available."
             await send_long(
                 ctx,
@@ -108,12 +114,27 @@ async def solar(ctx, *, topic: str):
             )
             return
 
-        facts = research_data.get("key_facts_th") or []
-        facts_display = "\n".join(f"- {fact}" for fact in facts[:3]) or "- (ไม่มีข้อเท็จจริงที่สรุปได้)"
-        await ctx.send(f'✅ Research complete. Key facts found:\n{facts_display}')
+        # Build a short preview of what the Engineer extracted.
+        preview_lines: list[str] = []
+        overview_th = (research_data.get("overview_th") or "").strip()
+        if overview_th:
+            preview_lines.append(f"📖 {overview_th}")
+        for section_key, marker in (
+            ("technical_th", "⚙️"),
+            ("cost_roi_th", "💰"),
+        ):
+            bullets = research_data.get(section_key) or []
+            for b in bullets[:2]:
+                preview_lines.append(f"{marker} {b}")
+        faq = research_data.get("faq_th") or []
+        if faq:
+            preview_lines.append(f"❓ {faq[0].get('q', '')}")
+
+        research_display = "\n".join(preview_lines) or "- (no preview)"
+        await send_long(ctx, research_display, prefix="✅ Research complete:")
 
         # Agent 3: WRITER - Draft
-        await ctx.send('✍️ **WRITER**: Drafting 700-word article...')
+        await ctx.send('✍️ **WRITER**: Drafting educational article (500–900 words)...')
         article = await bot.writer.process(research_data)
         draft_preview = article if len(article) <= 800 else article[:800] + "…"
         await ctx.send(f'✅ Draft complete (preview):\n\n{draft_preview}')
