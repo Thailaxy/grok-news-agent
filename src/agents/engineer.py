@@ -66,11 +66,13 @@ def _ddgs_text(query: str, region: str, max_results: int) -> list[dict]:
         return list(ddgs.text(query, region=region, max_results=max_results))
 
 
-class ResearchData(TypedDict):
+class ResearchData(TypedDict, total=False):
     topic: str
     summary_th: str
     key_facts_th: list[str]
     raw_sources: list[dict]
+    # Short human-readable reason surfaced to the user when raw_sources ends up empty.
+    debug: str
 
 
 class EngineerAgent(BaseAgent):
@@ -99,9 +101,10 @@ class EngineerAgent(BaseAgent):
         if not raw_sources:
             return ResearchData(
                 topic=topic,
-                summary_th="ไม่พบข้อมูลเกี่ยวกับหัวข้อนี้",
+                summary_th="",
                 key_facts_th=[],
                 raw_sources=[],
+                debug="DDGS returned 0 results for that query.",
             )
 
         synthesis = await self._synthesize(topic, raw_sources)
@@ -111,31 +114,52 @@ class EngineerAgent(BaseAgent):
         # Drop facts that are really "no information about X" non-facts
         # or that leaked untranslated Chinese/Japanese characters (bad translation).
         kept_facts: list[str] = []
+        dropped_offtopic = 0
+        dropped_cjk = 0
         for f in all_facts:
             if _is_off_topic(f):
                 logger.info("Dropping off-topic fact: %r", f)
+                dropped_offtopic += 1
                 continue
             if _has_untranslated_cjk(f):
                 logger.info("Dropping fact with untranslated CJK: %r", f)
+                dropped_cjk += 1
                 continue
             kept_facts.append(f)
 
-        summary_th = "" if _is_off_topic(summary_th_raw) or _has_untranslated_cjk(summary_th_raw) else summary_th_raw
+        summary_th = (
+            ""
+            if _is_off_topic(summary_th_raw) or _has_untranslated_cjk(summary_th_raw)
+            else summary_th_raw
+        )
 
-        # Fail the research step if what's left isn't enough to ground a 700-word post.
-        # Rule: need at least 2 substantive facts OR a substantive summary + 1 fact.
-        substantive = len(kept_facts) >= 2 or (summary_th and len(kept_facts) >= 1)
-        if not substantive:
+        # Fail the research step only if we have literally nothing to ground a post on.
+        # One substantive fact is enough — the Writer will work with what's there.
+        if not kept_facts and not summary_th:
+            if not all_facts and not summary_th_raw:
+                reason = (
+                    f"Got {len(raw_sources)} search result(s) but the LLM returned no facts. "
+                    "Sources likely didn't cover the topic — try rephrasing."
+                )
+            else:
+                reason = (
+                    f"LLM returned {len(all_facts)} fact(s) but all were dropped "
+                    f"(off-topic={dropped_offtopic}, untranslated CJK={dropped_cjk})."
+                )
             logger.error(
-                "Synthesis returned no usable facts for topic=%r "
-                "(raw_sources=%d, raw_facts=%d, kept=%d); failing the research step.",
-                topic, len(raw_sources), len(all_facts), len(kept_facts),
+                "Synthesis returned no usable content for topic=%r "
+                "(raw_sources=%d, raw_facts=%d, dropped_offtopic=%d, dropped_cjk=%d). "
+                "Raw synthesis: summary=%r facts=%r",
+                topic, len(raw_sources), len(all_facts),
+                dropped_offtopic, dropped_cjk,
+                summary_th_raw[:200], all_facts[:5],
             )
             return ResearchData(
                 topic=topic,
                 summary_th="",
                 key_facts_th=[],
                 raw_sources=[],
+                debug=reason,
             )
 
         return ResearchData(
@@ -174,17 +198,15 @@ class EngineerAgent(BaseAgent):
             f"SOURCES:\n{sources_text}\n\n"
             "งานของคุณ (TASK):\n"
             "1. อ่านแหล่งข้อมูลด้านบน (อาจเป็นภาษาอังกฤษ จีน ญี่ปุ่น ฯลฯ)\n"
-            "2. สรุปข้อเท็จจริงที่เกี่ยวกับ TOPIC โดยตรงเป็นภาษาไทยทั้งหมด (สูงสุด 5 ข้อ)\n"
+            "2. ดึงข้อเท็จจริงจาก SOURCES ที่มีประโยชน์ต่อการเขียนบทความเกี่ยวกับ TOPIC "
+            "เป็นภาษาไทย 3-5 ข้อ (ข้อเท็จจริงทั่วไปเกี่ยวกับโซลาร์ก็ได้ถ้าช่วยสนับสนุน TOPIC)\n"
             "3. เขียน summary_th 2-3 ประโยคเป็นภาษาไทย\n\n"
-            "กฎสำคัญ (STRICT RULES):\n"
-            "- แปลเนื้อหาจากทุกภาษาเป็นไทยให้สมบูรณ์ ห้ามคงตัวอักษรจีน ญี่ปุ่น เกาหลี หรือคำภาษาอังกฤษทั้งวลี "
-            "(ยกเว้นหน่วยและตัวย่อมาตรฐาน เช่น kW, kWh, ROI, %, ฿, Huawei, inverter)\n"
-            "- ใช้เฉพาะข้อมูลจาก SOURCES เท่านั้น ห้ามดึงความรู้จากภายนอก\n"
-            "- ถ้าแหล่งข้อมูลไม่ได้กล่าวถึง TOPIC หรือครอบคลุมเฉพาะความรู้ทั่วไปเกี่ยวกับพลังงานแสงอาทิตย์ "
-            "(เช่น หลักการทำงานของเซลล์แสงอาทิตย์) แต่ไม่ได้ตอบ TOPIC นี้ "
-            "ให้ใส่ key_facts_th เป็น [] (array ว่าง) และ summary_th เป็น \"\" — "
-            "ห้ามเติมข้อเท็จจริงทั่วไปที่ไม่ตรง TOPIC\n"
-            "- ห้ามใส่ประโยคอย่าง \"ไม่มีข้อมูลเกี่ยวกับ...\" เป็น fact — ให้ return array ว่างแทน\n\n"
+            "กฎ (RULES):\n"
+            "- แปลเนื้อหาเป็นไทยให้สมบูรณ์ ห้ามคงตัวอักษรจีน ญี่ปุ่น เกาหลี หรือคำภาษาอังกฤษทั้งวลี "
+            "(ยกเว้นหน่วยและตัวย่อมาตรฐาน: kW, kWh, ROI, %, ฿, ชื่อเฉพาะอย่าง Huawei, inverter)\n"
+            "- ใช้เฉพาะข้อมูลจาก SOURCES — ห้ามดึงความรู้ภายนอก\n"
+            "- ห้ามใส่ประโยคอย่าง \"ไม่มีข้อมูลเกี่ยวกับ...\" เป็น fact — ถ้าไม่มีข้อมูลเกี่ยวข้องเลย "
+            "ให้ใส่ key_facts_th = [] และ summary_th = \"\"\n\n"
             "OUTPUT FORMAT: ตอบเป็น JSON เท่านั้น (ห้ามมี markdown หรือข้อความอื่น):\n"
             '{"summary_th": "...", "key_facts_th": ["...", "..."]}'
         )
