@@ -101,10 +101,10 @@ async def solar(ctx, *, topic: str):
             or not (research_data.get("key_facts_th") or research_data.get("summary_th"))
         ):
             debug = (research_data or {}).get("debug") or "No details available."
-            await ctx.send(
-                "❌ Engineer couldn't gather usable research for that topic.\n"
-                f"→ {debug}\n"
-                "Try rephrasing with more specific keywords."
+            await send_long(
+                ctx,
+                f"{debug}\nTry rephrasing with more specific keywords.",
+                prefix="❌ Engineer couldn't gather usable research for that topic.",
             )
             return
 

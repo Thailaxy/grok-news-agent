@@ -137,22 +137,35 @@ class EngineerAgent(BaseAgent):
         # One substantive fact is enough — the Writer will work with what's there.
         if not kept_facts and not summary_th:
             if not all_facts and not summary_th_raw:
-                reason = (
-                    f"Got {len(raw_sources)} search result(s) but the LLM returned no facts. "
-                    "Sources likely didn't cover the topic — try rephrasing."
+                reason_short = (
+                    f"Got {len(raw_sources)} search result(s) but the LLM returned no facts."
                 )
             else:
-                reason = (
+                reason_short = (
                     f"LLM returned {len(all_facts)} fact(s) but all were dropped "
                     f"(off-topic={dropped_offtopic}, untranslated CJK={dropped_cjk})."
                 )
+
+            # Dump enough detail for the user to see *why* — source titles + raw LLM reply.
+            raw_llm = getattr(self, "_last_raw_synthesis", "") or "(empty)"
+            if len(raw_llm) > 600:
+                raw_llm = raw_llm[:600] + "…"
+            src_preview = "\n".join(
+                f"  [{i}] {s['title'][:120]}" for i, s in enumerate(raw_sources[:5], 1)
+            )
+            reason = (
+                f"{reason_short}\n"
+                f"Sources found:\n{src_preview}\n"
+                f"Raw LLM output (truncated):\n{raw_llm}"
+            )
+
             logger.error(
                 "Synthesis returned no usable content for topic=%r "
                 "(raw_sources=%d, raw_facts=%d, dropped_offtopic=%d, dropped_cjk=%d). "
-                "Raw synthesis: summary=%r facts=%r",
+                "Raw synthesis: %r",
                 topic, len(raw_sources), len(all_facts),
                 dropped_offtopic, dropped_cjk,
-                summary_th_raw[:200], all_facts[:5],
+                raw_llm,
             )
             return ResearchData(
                 topic=topic,
@@ -171,54 +184,69 @@ class EngineerAgent(BaseAgent):
 
     def _search(self, topic: str) -> list[dict]:
         # Use the user's topic verbatim — wrapping with "solar energy ... Thailand"
-        # was drowning specific queries (Huawei inverters, 2026 incentives, etc.)
-        # in generic overview pages. "wt-wt" = worldwide, no region bias;
-        # "th-th" was pulling Chinese/Japanese Wikipedia mirrors for niche topics.
+        # was drowning specific queries in generic overview pages.
         query = topic
 
-        # Try news first; many solar topics are exploratory/how-to, not newsy,
-        # so we also fall back to general text search when news returns nothing.
-        news_results: list[dict] = []
-        try:
-            news_results = _ddgs_news(query, region="wt-wt", max_results=5)
-        except RatelimitException:
-            logger.warning("DDGS news rate-limited after retries; falling back to text search")
-        except DuckDuckGoSearchException as e:
-            logger.warning("DDGS news failed (%s); falling back to text search", e)
+        # Cascade:
+        # 1. news (wt-wt) — real news articles
+        # 2. text (wt-wt) — general web content (how-to, reviews, forums)
+        # 3. text (th-th) — Thai-region fallback for Thai-language queries
+        def _try_news(region: str) -> list[dict]:
+            try:
+                return _ddgs_news(query, region=region, max_results=5)
+            except (RatelimitException, DuckDuckGoSearchException) as e:
+                logger.warning("DDGS news (%s) failed: %s", region, e)
+                return []
 
-        if news_results:
-            return news_results
+        def _try_text(region: str) -> list[dict]:
+            try:
+                return _ddgs_text(query, region=region, max_results=5)
+            except (RatelimitException, DuckDuckGoSearchException) as e:
+                logger.warning("DDGS text (%s) failed: %s", region, e)
+                return []
 
-        logger.info("DDGS news returned 0 results for %r; trying text search", query)
-        try:
-            return _ddgs_text(query, region="wt-wt", max_results=5)
-        except (RatelimitException, DuckDuckGoSearchException) as e:
-            logger.error("DDGS text search also failed: %s", e)
-            return []
+        for label, fn in (
+            ("news wt-wt", lambda: _try_news("wt-wt")),
+            ("text wt-wt", lambda: _try_text("wt-wt")),
+            ("text th-th", lambda: _try_text("th-th")),
+        ):
+            results = fn()
+            if results:
+                logger.info("DDGS %s returned %d results for %r", label, len(results), query)
+                return results
+            logger.info("DDGS %s returned 0 results for %r; trying next", label, query)
+
+        return []
 
     async def _synthesize(self, topic: str, sources: list[dict]) -> dict:
         sources_text = "\n\n".join(
             f"[{i}] {s['title']}\n{s['body']}\nSource: {s['url']}"
             for i, s in enumerate(sources, 1)
         )
+        # Remember the raw LLM output so process() can surface it on failure.
+        self._last_raw_synthesis: str = ""
         prompt = (
-            f"หัวข้อ (TOPIC): {topic}\n\n"
-            f"SOURCES:\n{sources_text}\n\n"
-            "งานของคุณ (TASK):\n"
-            "1. อ่านแหล่งข้อมูลด้านบน (อาจเป็นภาษาอังกฤษ จีน ญี่ปุ่น ฯลฯ)\n"
-            "2. ดึงข้อเท็จจริงจาก SOURCES ที่มีประโยชน์ต่อการเขียนบทความเกี่ยวกับ TOPIC "
-            "เป็นภาษาไทย 3-5 ข้อ (ข้อเท็จจริงทั่วไปเกี่ยวกับโซลาร์ก็ได้ถ้าช่วยสนับสนุน TOPIC)\n"
-            "3. เขียน summary_th 2-3 ประโยคเป็นภาษาไทย\n\n"
-            "กฎ (RULES):\n"
-            "- แปลเนื้อหาเป็นไทยให้สมบูรณ์ ห้ามคงตัวอักษรจีน ญี่ปุ่น เกาหลี หรือคำภาษาอังกฤษทั้งวลี "
-            "(ยกเว้นหน่วยและตัวย่อมาตรฐาน: kW, kWh, ROI, %, ฿, ชื่อเฉพาะอย่าง Huawei, inverter)\n"
-            "- ใช้เฉพาะข้อมูลจาก SOURCES — ห้ามดึงความรู้ภายนอก\n"
-            "- ห้ามใส่ประโยคอย่าง \"ไม่มีข้อมูลเกี่ยวกับ...\" เป็น fact — ถ้าไม่มีข้อมูลเกี่ยวข้องเลย "
-            "ให้ใส่ key_facts_th = [] และ summary_th = \"\"\n\n"
-            "OUTPUT FORMAT: ตอบเป็น JSON เท่านั้น (ห้ามมี markdown หรือข้อความอื่น):\n"
-            '{"summary_th": "...", "key_facts_th": ["...", "..."]}'
+            f"TOPIC: {topic}\n\n"
+            f"SOURCES (may be in English, Thai, Chinese, Japanese, etc.):\n{sources_text}\n\n"
+            "TASK: Extract 3-5 useful facts from SOURCES for writing a solar-energy "
+            "Facebook article related to TOPIC. Output in Thai.\n\n"
+            "GUIDELINES:\n"
+            "- Always extract at least 3 facts from the provided sources. Even if SOURCES "
+            "don't match TOPIC exactly, extract the most relevant solar-related facts "
+            "(benefits, how things work, costs, installation, ROI, brands, etc.) — the "
+            "Writer will use whatever you give.\n"
+            "- Translate every fact fully into Thai. Do NOT keep Chinese / Japanese / Korean "
+            "characters. English is OK only for standard units and proper nouns "
+            "(kW, kWh, ROI, %, ฿, Huawei, inverter, on-grid, off-grid, etc.).\n"
+            "- Do NOT invent data outside SOURCES.\n"
+            "- Do NOT write meta-facts like \"the source doesn't mention X\" — just extract "
+            "what IS in the source.\n"
+            "- summary_th should be 2-3 Thai sentences summarising the facts.\n\n"
+            "OUTPUT FORMAT: JSON only (no markdown, no prose):\n"
+            '{"summary_th": "...", "key_facts_th": ["...", "...", "..."]}'
         )
         raw = await self.chat(prompt)
+        self._last_raw_synthesis = raw
         return self._parse_json(raw)
 
     @staticmethod
