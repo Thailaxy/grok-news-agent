@@ -175,13 +175,21 @@ class EngineerAgent(BaseAgent):
         # in generic overview pages. "wt-wt" = worldwide, no region bias;
         # "th-th" was pulling Chinese/Japanese Wikipedia mirrors for niche topics.
         query = topic
+
+        # Try news first; many solar topics are exploratory/how-to, not newsy,
+        # so we also fall back to general text search when news returns nothing.
+        news_results: list[dict] = []
         try:
-            return _ddgs_news(query, region="wt-wt", max_results=5)
+            news_results = _ddgs_news(query, region="wt-wt", max_results=5)
         except RatelimitException:
             logger.warning("DDGS news rate-limited after retries; falling back to text search")
         except DuckDuckGoSearchException as e:
             logger.warning("DDGS news failed (%s); falling back to text search", e)
 
+        if news_results:
+            return news_results
+
+        logger.info("DDGS news returned 0 results for %r; trying text search", query)
         try:
             return _ddgs_text(query, region="wt-wt", max_results=5)
         except (RatelimitException, DuckDuckGoSearchException) as e:

@@ -27,6 +27,10 @@ TOPIC_MAX = 200
 def _sanitize_topic(raw: str) -> str | None:
     """Strip control chars, collapse whitespace, enforce length limits.
 
+    Also strips surrounding quote characters — Discord passes `"foo bar"`
+    through verbatim, and leaving the quotes in forces DDGS into exact-phrase
+    match mode, which wipes out the result set for most how-to queries.
+
     Returns the cleaned topic, or None if invalid.
     """
     if raw is None:
@@ -36,6 +40,11 @@ def _sanitize_topic(raw: str) -> str | None:
         ch for ch in raw if unicodedata.category(ch)[0] not in ("C",)
     )
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    # Strip matching surrounding quotes (ASCII and smart/curly). Loop in case
+    # the user typed e.g. `""foo""`.
+    _QUOTE_PAIRS = {'"': '"', "'": "'", "\u201c": "\u201d", "\u2018": "\u2019", "「": "」", "『": "』"}
+    while len(cleaned) >= 2 and cleaned[0] in _QUOTE_PAIRS and cleaned[-1] == _QUOTE_PAIRS[cleaned[0]]:
+        cleaned = cleaned[1:-1].strip()
     if not (TOPIC_MIN <= len(cleaned) <= TOPIC_MAX):
         return None
     return cleaned
